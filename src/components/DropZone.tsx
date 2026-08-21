@@ -68,7 +68,7 @@ interface SendSafelyModalProps {
   parsedUrl: ParsedSendSafelyUrl | null;
   validateCredentials: (host: string, key: string, secret: string) => void;
   saveCredentials: (key: string, secret: string) => void;
-  loadSendSafelyFile: (file: PackageFile) => void;
+  loadSendSafelyFile: (file: PackageFile, force?: boolean) => void;
   setLoading: (loading: boolean) => void;
   loadingMessage: string;
   setLoadingMessage: (message: string) => void;
@@ -667,6 +667,33 @@ function SendSafelyModalContent({
 
             const renderFileItem = (file: PackageFile) => {
               const isZipFile = file.fileName.toLowerCase().endsWith(".zip");
+              // Non-zip files that still have ".zip" somewhere in the name (e.g.
+              // foo-bar.zip.tmp) may be a (partial) zip that just lacks the
+              // extension, so offer to try opening them as a zip anyway.
+              const canTryAsZip =
+                !isZipFile && file.fileName.toLowerCase().includes(".zip");
+
+              const startLoad = async (force: boolean) => {
+                // Load SendSafely file through worker manager
+                setFileLoading(true);
+                setFileError(null);
+                setLoading(true);
+                setLoadingMessage("Preparing to load SendSafely file...");
+                try {
+                  await loadSendSafelyFile(file, force);
+                  // Note: Don't close modal here - it will be closed by:
+                  // 1. User clicking "Proceed" button if recovery warning is shown
+                  // 2. Normal flow via onLoadingStage if no recovery warning
+                } catch (error) {
+                  setFileError(
+                    error instanceof Error
+                      ? error.message
+                      : "Unknown error occurred",
+                  );
+                  setLoading(false);
+                  setFileLoading(false);
+                }
+              };
 
               return (
                 <div
@@ -699,33 +726,7 @@ function SendSafelyModalContent({
                         }
                       : undefined
                   }
-                  onClick={
-                    isZipFile
-                      ? async () => {
-                          // Load SendSafely ZIP file through worker manager
-                          setFileLoading(true);
-                          setFileError(null);
-                          setLoading(true);
-                          setLoadingMessage(
-                            "Preparing to load SendSafely file...",
-                          );
-                          try {
-                            await loadSendSafelyFile(file);
-                            // Note: Don't close modal here - it will be closed by:
-                            // 1. User clicking "Proceed" button if recovery warning is shown
-                            // 2. Normal flow via onLoadingStage if no recovery warning
-                          } catch (error) {
-                            setFileError(
-                              error instanceof Error
-                                ? error.message
-                                : "Unknown error occurred",
-                            );
-                            setLoading(false);
-                            setFileLoading(false);
-                          }
-                        }
-                      : undefined
-                  }
+                  onClick={isZipFile ? () => startLoad(false) : undefined}
                 >
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: "bold", marginBottom: "2px" }}>
@@ -746,6 +747,25 @@ function SendSafelyModalContent({
                           return `${sizeInMB.toFixed(2)} MB`;
                         }
                       })()}
+                      {canTryAsZip && (
+                        <>
+                          {" • "}
+                          <span
+                            role="link"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startLoad(true);
+                            }}
+                            style={{
+                              color: "var(--accent-primary)",
+                              textDecoration: "underline",
+                              cursor: "pointer",
+                            }}
+                          >
+                            try to open as .zip
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                   {isZipFile && (
@@ -1071,8 +1091,8 @@ function DropZone() {
     }
   };
 
-  const loadSendSafelyFile = async (file: PackageFile) => {
-    if (!file.fileName.toLowerCase().endsWith(".zip")) {
+  const loadSendSafelyFile = async (file: PackageFile, force = false) => {
+    if (!force && !file.fileName.toLowerCase().endsWith(".zip")) {
       throw new Error("Please select a .zip file");
     }
 
